@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>PDF Keyword Search</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 40px;
+    }
+    input, button {
+      padding: 10px;
+      font-size: 16px;
+    }
+    #results {
+      margin-top: 20px;
+    }
+    .result {
+      margin-bottom: 20px;
+      padding: 10px;
+      border: 1px solid #ccc;
+      border-left: 4px solid green;
+    }
+  </style>
+</head>
+<body>
+  <h2>Search Keyword in PDFs</h2>
+  <form id="searchForm">
+    <input type="text" name="query" placeholder="Enter keyword (e.g. money, invoice)" required />
+    <button type="submit">Search</button>
+  </form>
+
+  <div id="results"></div>
+
+  <script>
+    const form = document.getElementById("searchForm");
+    const resultsDiv = document.getElementById("results");
+
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const formData = new FormData(form);
+      const query = formData.get("query");
+
+      resultsDiv.innerHTML = "Searching...";
+
+      const res = await fetch("/search", {
+        method: "POST",
+        body: formData,
+      });
+
+      const results = await res.json();
+      resultsDiv.innerHTML = "";
+
+      if (results.length === 0) {
+        resultsDiv.innerHTML = "<p>No direct match found.</p>";
+        return;
+      }
+
+      results.forEach(item => {
+        const div = document.createElement("div");
+        div.className = "result";
+        div.innerHTML = `
+          <strong>📄 File:</strong> ${item.file} <br>
+          <strong>📝 Sentence:</strong> ${item.sentence} <br>
+          <small>🕒 Indexed on: ${item.timestamp}</small>
+        `;
+        resultsDiv.appendChild(div);
+      });
+    };
+  </script>
+</body>
+</html>

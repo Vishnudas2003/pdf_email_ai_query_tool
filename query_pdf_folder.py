@@ -1,5 +1,7 @@
 import os
 import re
+from datetime import datetime
+from flask import Flask, render_template, request, jsonify
 from PyPDF2 import PdfReader
 from sentence_transformers import SentenceTransformer
 import faiss
@@ -7,6 +9,8 @@ import numpy as np
 
 PDF_FOLDER = os.path.expanduser("~/Desktop/TESTING")
 CHUNK_SIZE = 1000
+
+app = Flask(__name__)
 
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
@@ -26,7 +30,8 @@ def extract_text_from_pdfs(folder_path):
                 metadata.append({
                     "file": file,
                     "chunk_index": i // CHUNK_SIZE,
-                    "chunk_text": chunk
+                    "chunk_text": chunk,
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 })
     return all_chunks, metadata
 
@@ -34,49 +39,60 @@ def get_embeddings(texts):
     return model.encode(texts, convert_to_numpy=True).astype("float32")
 
 def extract_matching_sentence(chunk, keyword):
-    # Split into rough sentences and find the one containing the keyword
     sentences = re.split(r'(?<=[.!?])\s+', chunk)
     for sentence in sentences:
         if keyword.lower() in sentence.lower():
             return sentence.strip()
     return None
 
-def search_keyword(query, chunks, metadata, index):
-    query_embedding = model.encode([query])[0].astype("float32")
-    k = 10
-    distances, indices = index.search(np.array([query_embedding]), k)
+@app.route("/")
+def index():
+    return render_template("index.html")
 
-    matched_files = set()
-    print(f"\n🔍 Results for: '{query}'")
-    for idx in indices[0]:
-        file = metadata[idx]['file']
-        chunk_text = metadata[idx]['chunk_text']
-        sentence = extract_matching_sentence(chunk_text, query)
-        if sentence:
-            matched_files.add(file)
-            print(f"✅ Found in {file} (chunk {metadata[idx]['chunk_index']})")
-            print(f"   📝 Matched Sentence: {sentence}")
-    if not matched_files:
-        print("❌ No direct match found, but these are similar based on context:")
+@app.route("/search", methods=["POST"])
+def search():
+    query = request.form.get("query", "").strip()
+    keywords = [kw.strip() for kw in query.split() if kw.strip()]
+    
+    if not keywords:
+        return jsonify([])
+
+    results = []
+    seen = set()  # Avoid duplicates
+
+    for keyword in keywords:
+        query_embedding = model.encode([keyword])[0].astype("float32")
+        k = 10
+        distances, indices = index.search(np.array([query_embedding]), k)
+
         for idx in indices[0]:
-            file = metadata[idx]['file']
-            print(f"🔹 Possible match in {file} (chunk {metadata[idx]['chunk_index']})")
+            meta = metadata[idx]
+            sentence = extract_matching_sentence(meta['chunk_text'], keyword)
+            if sentence:
+                result_key = (meta['file'], sentence)
+                if result_key not in seen:
+                    seen.add(result_key)
+                    results.append({
+                        "file": meta['file'],
+                        "sentence": sentence,
+                        "timestamp": meta['timestamp']
+                    })
+
+    return jsonify(results)
+
+# Only run index building once
+print("📁 Scanning PDF folder...")
+chunks, metadata = extract_text_from_pdfs(PDF_FOLDER)
+print(f"✅ Extracted {len(chunks)} chunks.")
+
+print("🧠 Creating embeddings locally...")
+embeddings = get_embeddings(chunks)
+
+print("⚡ Building vector index...")
+dimension = embeddings.shape[1]
+index = faiss.IndexFlatL2(dimension)
+index.add(embeddings)
+print("✅ Vector index built.")
 
 if __name__ == "__main__":
-    print("📁 Scanning PDF folder...")
-    chunks, metadata = extract_text_from_pdfs(PDF_FOLDER)
-    print(f"✅ Extracted {len(chunks)} chunks.")
-
-    print("🧠 Creating embeddings locally...")
-    embeddings = get_embeddings(chunks)
-
-    print("⚡ Building vector index...")
-    dimension = embeddings.shape[1]
-    index = faiss.IndexFlatL2(dimension)
-    index.add(embeddings)
-
-    while True:
-        user_query = input("\nAsk your keyword (or type 'exit'): ").strip()
-        if user_query.lower() == 'exit':
-            break
-        search_keyword(user_query, chunks, metadata, index)
+    app.run(debug=True)
